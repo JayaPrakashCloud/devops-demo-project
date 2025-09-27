@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  database:
+    image: postgres:15
+    container_name: devops_demo_db
+    environment:
+      POSTGRES_DB: devops_demo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Web Application
+  web:
+    build: .
+    container_name: devops_demo_web
+    ports:
+      - "5000:5000"
+    environment:
+      DB_HOST: database
+      DB_NAME: devops_demo
+      DB_USER: postgres
+      DB_PASSWORD: password
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
