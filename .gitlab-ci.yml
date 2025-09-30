@@ -1,0 +1,82 @@
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  IMAGE_NAME: $DOCKERHUB_USERNAME/devops-demo
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+
+# Test Stage
+test:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+  script:
+    - python -m pytest tests/ -v --tb=short
+    - echo "All tests passed!"
+  only:
+    - main
+    - merge_requests
+
+# Build Stage
+build:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  before_script:
+    - echo $DOCKERHUB_TOKEN | docker login -u $DOCKERHUB_USERNAME --password-stdin
+  script:
+    - docker build -t $IMAGE_NAME:$IMAGE_TAG .
+    - docker tag $IMAGE_NAME:$IMAGE_TAG $IMAGE_NAME:latest
+    - docker push $IMAGE_NAME:$IMAGE_TAG
+    - docker push $IMAGE_NAME:latest
+    - echo "Image pushed - $IMAGE_NAME:$IMAGE_TAG"
+  only:
+    - main
+
+# Deploy Stage
+deploy:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  before_script:
+    - mkdir -p ~/.kube
+    - echo "$KUBECONFIG_BASE64" | base64 -d > ~/.kube/config
+    - chmod 600 ~/.kube/config
+  script:
+    - echo "Deploying to Kubernetes..."
+    - kubectl get nodes
+    - kubectl set image deployment/web web=$IMAGE_NAME:$IMAGE_TAG --namespace=default
+    - kubectl rollout status deployment/web --namespace=default --timeout=300s
+    - kubectl get pods -l app=web
+    - echo "Deployment completed successfully!"
+    - echo "Application URL:"
+    - kubectl get service web-service
+  only:
+    - main
+  environment:
+    name: production
+    url: http://your-app-url
+
+# Manual deployment job
+deploy-manual:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  before_script:
+    - mkdir -p ~/.kube
+    - echo "$KUBECONFIG_BASE64" | base64 -d > ~/.kube/config
+    - chmod 600 ~/.kube/config
+  script:
+    - echo "Manual deployment triggered"
+    - kubectl set image deployment/web web=$IMAGE_NAME:$IMAGE_TAG --namespace=default
+    - kubectl rollout status deployment/web --namespace=default --timeout=300s
+    - echo "Manual deployment completed!"
+  when: manual
+  only:
+    - main
