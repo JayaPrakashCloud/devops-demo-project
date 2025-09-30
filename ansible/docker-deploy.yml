@@ -1,0 +1,47 @@
+---
+- name: Deploy application using Docker Compose
+  hosts: local
+  become: yes
+  vars:
+    project_dir: /home/jayaprakash/devops-demo-project
+    
+  tasks:
+    - name: Ensure Docker is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+        
+    - name: Ensure docker-compose is installed
+      get_url:
+        url: "https://github.com/docker/compose/releases/latest/download/docker-compose-{{ ansible_system }}-{{ ansible_architecture }}"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+      
+    - name: Stop existing containers
+      shell: docker-compose down
+      args:
+        chdir: "{{ project_dir }}"
+      ignore_errors: yes
+      
+    - name: Pull latest images
+      shell: docker-compose pull
+      args:
+        chdir: "{{ project_dir }}"
+        
+    - name: Start application
+      shell: docker-compose up -d --build
+      args:
+        chdir: "{{ project_dir }}"
+        
+    - name: Wait for application to be ready
+      uri:
+        url: http://localhost:5000/health
+        method: GET
+        status_code: 200
+      retries: 30
+      delay: 2
+      
+    - name: Display application status
+      debug:
+        msg: "Application is running at http://localhost:5000"

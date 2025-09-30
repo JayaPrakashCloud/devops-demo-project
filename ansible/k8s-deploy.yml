@@ -1,0 +1,162 @@
+---
+- name: Deploy application to Kubernetes
+  hosts: local
+  vars:
+    namespace: default
+    
+  tasks:
+    - name: Apply PostgreSQL deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: postgres
+            namespace: "{{ namespace }}"
+            labels:
+              app: postgres
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: postgres
+            template:
+              metadata:
+                labels:
+                  app: postgres
+              spec:
+                containers:
+                - name: postgres
+                  image: postgres:15
+                  ports:
+                  - containerPort: 5432
+                  env:
+                  - name: POSTGRES_DB
+                    value: devops_demo
+                  - name: POSTGRES_USER
+                    value: postgres
+                  - name: POSTGRES_PASSWORD
+                    value: password
+                  volumeMounts:
+                  - name: postgres-storage
+                    mountPath: /var/lib/postgresql/data
+                  readinessProbe:
+                    exec:
+                      command:
+                        - pg_isready
+                        - -U
+                        - postgres
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                volumes:
+                - name: postgres-storage
+                  emptyDir: {}
+
+    - name: Apply PostgreSQL service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-service
+            namespace: "{{ namespace }}"
+            labels:
+              app: postgres
+          spec:
+            ports:
+            - port: 5432
+              targetPort: 5432
+            selector:
+              app: postgres
+            type: ClusterIP
+
+    - name: Apply Web deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+            namespace: "{{ namespace }}"
+            labels:
+              app: web
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: web
+            template:
+              metadata:
+                labels:
+                  app: web
+              spec:
+                containers:
+                - name: web
+                  image: "{{ web_image | default('jayaprakashcloud/devops-demo:v3.0') }}"
+                  ports:
+                  - containerPort: 5000
+                  env:
+                  - name: DB_HOST
+                    value: postgres-service
+                  - name: DB_NAME
+                    value: devops_demo
+                  - name: DB_USER
+                    value: postgres
+                  - name: DB_PASSWORD
+                    value: password
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: 5000
+                    initialDelaySeconds: 10
+                    periodSeconds: 5
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: 5000
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+
+    - name: Apply Web service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: web-service
+            namespace: "{{ namespace }}"
+            labels:
+              app: web
+          spec:
+            ports:
+            - name: http
+              port: 80
+              targetPort: 5000
+              nodePort: 30000
+            selector:
+              app: web
+            type: NodePort
+
+    - name: Wait for deployment to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: web
+        namespace: "{{ namespace }}"
+        wait: true
+        condition:
+          type: Available
+          status: "True"
+        wait_timeout: 300
+        
+    - name: Get service URL
+      shell: minikube service web-service --url
+      register: service_url
+      
+    - name: Display service URL
+      debug:
+        msg: "Application is available at: {{ service_url.stdout }}"

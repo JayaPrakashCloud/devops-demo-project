@@ -1,9 +1,15 @@
-from flask import Flask
+from flask import Flask, request
 import psycopg2
 import os
 from datetime import datetime
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import time
 
 app = Flask(__name__)
+
+# Prometheus metrics
+REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
+REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency')
 
 # Database connection function
 def get_db_connection():
@@ -39,6 +45,25 @@ def init_db():
         except Exception as e:
             print(f"Database init error: {e}")
 
+@app.before_request
+def before_request():
+    request.start_time = time.time()
+
+@app.after_request
+def after_request(response):
+    # Record metrics
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.endpoint or 'unknown',
+        status=response.status_code
+    ).inc()
+    
+    # Record latency
+    if hasattr(request, 'start_time'):
+        REQUEST_LATENCY.observe(time.time() - request.start_time)
+    
+    return response
+
 @app.route('/')
 def home():
     conn = get_db_connection()
@@ -48,7 +73,7 @@ def home():
         try:
             cur = conn.cursor()
             # Record this visit
-            cur.execute("INSERT INTO visits (ip_address) VALUES (%s)", ('127.0.0.1',))
+            cur.execute("INSERT INTO visits (ip_address) VALUES (%s)", (request.remote_addr or '127.0.0.1',))
             conn.commit()
             
             # Get total visits
@@ -64,7 +89,7 @@ def home():
     <h1>DevOps Demo Application</h1>
     <p>This app has been visited <strong>{visit_count}</strong> times!</p>
     <p>Powered by PostgreSQL database</p>
-    <p><a href="/health">Health Check</a> | <a href="/visits">View All Visits</a></p>
+    <p><a href="/health">Health Check</a> | <a href="/visits">View All Visits</a> | <a href="/metrics">Metrics</a></p>
     '''
 
 @app.route('/health')
@@ -100,6 +125,11 @@ def visits():
         return html
     except Exception as e:
         return f"Error: {e}"
+
+@app.route('/metrics')
+def metrics():
+    """Prometheus metrics endpoint"""
+    return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
 if __name__ == '__main__':
     init_db()
